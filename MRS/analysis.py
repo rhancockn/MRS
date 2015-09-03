@@ -220,7 +220,7 @@ def coil_combine(data, w_idx=[1,2,3], coil_dim=2, sampling_rate=5000.):
 
 def get_spectra(data, filt_method=dict(lb=0.1, filt_order=256),
                 spect_method=dict(NFFT=1024, n_overlap=1023, BW=2),
-                phase_zero=None, line_broadening=None, zerofill=None):
+                phase_zero=None, line_broadening=None, zerofill=None, sampling_rate=5000.0):
     """
     Derive the spectra from MRS data
 
@@ -268,7 +268,7 @@ def get_spectra(data, filt_method=dict(lb=0.1, filt_order=256),
 
     """
     if not isinstance(data, nt.TimeSeries):
-       data = nt.TimeSeries(data, sampling_rate=5000.0)  
+       data = nt.TimeSeries(data, sampling_rate=sampling_rate)
     if filt_method is not None:
         filtered = nta.FilterAnalyzer(data, **filt_method).fir
     else:
@@ -354,9 +354,9 @@ def fit_lorentzian(spectra, f_ppm, lb=2.6, ub=3.6):
    bounds = [(lb,ub), #peak
              (0,None), #area
              (0,None), #hwhm
-             (-np.pi/2, np.pi/2), #phase
+             (-np.pi, np.pi), #phase
              (None,None), #offset
-             (None, None)] #drift
+             (None,None)] #drift
 
    model = np.empty((spectra.shape[0], n_points))
    signal = np.empty((spectra.shape[0], n_points))
@@ -445,6 +445,7 @@ def _two_func_initializer(freqs, signal):
    initial_amp_2 = max_sig_2
    initial_f0_1 = freqs[max_idx_1]
    initial_f0_2 = freqs[max_idx_2]
+   #TODO: fix this to avoid cases where the hwhm index is always on the leftmost peak
    half_max_idx_1 = np.argmin(np.abs(np.real(signal) - max_sig_1/2))
    initial_hwhm_1 = np.abs(initial_f0_1 - freqs[half_max_idx_1])
    half_max_idx_2 = np.argmin(np.abs(np.real(signal) - max_sig_2/2))
@@ -461,6 +462,7 @@ def _two_func_initializer(freqs, signal):
 
    initial_a_2 = (np.sum(np.real(signal)[max_idx_2:max_idx_2 +
                                          np.abs(half_max_idx_2)*2]) ) * 2
+
 
    return (initial_f0_1,
            initial_f0_2,
@@ -512,6 +514,165 @@ def _do_two_lorentzian_fit(freqs, signal, bounds=None):
                                 ut.two_lorentzian, w, func_list),
                                 bounds=bounds)
    return params
+def fit_gaba_doublet(spectra,f_ppm, lb=2.8,ub=3.2):
+  #def gaba_doublet(freq, freq3,freqdiff, sigma1,sigma2,amp1,amp2,offset,drift):
+
+  idx = ut.make_idx(f_ppm,lb,ub)
+  n_points = np.abs(idx.stop - idx.start)
+  n_params = 8
+  bounds =  [(3.03,3.1), #peak1
+             (.08, .18), 
+             (0,.2), #sigma1
+             (0,.2), #sigma2
+             (0,None), #amp1
+             (0,None), #amp2
+             (None,None), #offset
+             (None,None)]
+  model = np.empty((spectra.shape[0], n_points))
+  signal = np.empty((spectra.shape[0], n_points))
+  params = np.empty((spectra.shape[0], n_params))
+  resid = np.empty(spectra.shape[0])
+  initial = [3.07,.12,.05, .05, .02, .02,0,0]
+  for ii, xx in enumerate(spectra):
+      # We fit to the real spectrum:
+      signal[ii] = np.real(xx[idx])
+      params[ii], _ = lsq.leastsqbound(mopt.err_func,initial, args=(f_ppm[idx],signal[ii],ut.gaba_doublet,None,None),bounds=bounds)
+
+      model[ii] = ut.gaba_doublet(f_ppm[idx], *params[ii])
+      resid[ii] = np.sum((np.real(signal[ii])-model[ii])**2)
+  return model, signal, params,resid
+
+
+def fit_glx_doublet(spectra,f_ppm, lb=3.6,ub=3.9):
+  #def gaba_doublet(freq, freq3,freqdiff, sigma1,sigma2,amp1,amp2,offset,drift):
+
+  idx = ut.make_idx(f_ppm,lb,ub)
+  n_points = np.abs(idx.stop - idx.start)
+  n_params = 8
+  bounds =  [(3.75,3.85), #peak1
+             (.05, .2), 
+             (0,.2), #sigma1
+             (0,.2), #sigma2
+             (0,None), #amp1
+             (0,None), #amp2
+             (None,None), #offset
+             (None,None)]
+  model = np.empty((spectra.shape[0], n_points))
+  signal = np.empty((spectra.shape[0], n_points))
+  params = np.empty((spectra.shape[0], n_params))
+  resid = np.empty(spectra.shape[0])
+  initial = [3.792,.1,.05, .05, .02, .02,0,0]
+  for ii, xx in enumerate(spectra):
+      # We fit to the real spectrum:
+      signal[ii] = np.real(xx[idx])
+      params[ii], _ = lsq.leastsqbound(mopt.err_func,initial, args=(f_ppm[idx],signal[ii],ut.gaba_doublet,None,None),bounds=bounds)
+
+      model[ii] = ut.gaba_doublet(f_ppm[idx], *params[ii])
+      resid[ii] = np.sum((np.real(signal[ii])-model[ii])**2)
+  return model, signal, params,resid
+
+
+def fit_cho_cr_model(spectra, f_ppm, lb=2.7, ub=3.5):
+   """
+   Fit a lorentzian function to the sum spectra to be used for estimation of
+   the creatine and choline peaks.
+   
+   Parameters
+   ----------
+   spectra : array of shape (n_transients, n_points)
+      Typically the sum of the on/off spectra in each transient.
+
+   f_ppm : array
+
+   lb, ub : floats
+      In ppm, the range over which optimization is bounded
+   
+   """
+   # We are only going to look at the interval between lb and ub
+   idx = ut.make_idx(f_ppm, lb, ub)
+   n_points = np.abs(idx.stop - idx.start) 
+   n_params = 7 # Lotsa params!
+   # Set the bounds for the optimization
+   bounds =  [(2.9,3.1), #peak1
+             (0,None), #area1
+             (0,None), #area2
+             (0,(ub-lb)/2), #hwhm1
+             (-np.pi/2, np.pi/2), #phase This really should be in pi/2 bounds
+             (None,None), #offset
+             (None,None)]
+
+   model = np.empty((spectra.shape[0], n_points))
+   signal = np.empty((spectra.shape[0], n_points))
+   params = np.empty((spectra.shape[0], n_params))
+   resid = np.empty(spectra.shape[0])
+   for ii, xx in enumerate(spectra):
+      # We fit to the real spectrum:
+      signal[ii] = np.real(xx[idx])
+      params[ii] = _do_cho_cr_model_fit(f_ppm[idx], xx[idx],
+                                      bounds=bounds)
+      
+      model[ii] = ut.cho_cr_model(f_ppm[idx], *params[ii])
+      resid[ii] = np.sum((np.real(signal[ii])-model[ii])**2)
+   
+   return model, signal, params,resid
+
+
+def _do_cho_cr_model_fit(freqs,signal,bounds=None):
+  initial = _two_func_initializer(freqs, signal)
+  #freq0,area1,area2,hwhm, phase,offset,drift
+  #TODO: fix initializer so we can use an actual area estimate here and Cr parameters
+  #initial = (initial[0], initial[4], initial[4]/3, initial[6], initial[8], initial[10], initial[11]) #init with Cho
+  initial = (initial[1], initial[4]/3, initial[4], initial[7],initial[9],initial[10],initial[11]) #init with Cr
+  func_list = [[ut.cho_cr_model, np.arange(7)]]
+  #unweighted optimization
+  params, _ = lsq.leastsqbound(mopt.err_func,initial, args=(freqs,np.real(signal),ut.cho_cr_model,None,None),bounds=bounds)
+
+  return params
+
+def _do_two_lorentzian_fit2(freqs, signal, bounds=None):
+    """
+
+    Helper function for the Two-Lorentzian fit
+
+    """
+
+
+    initial = _two_func_initializer(freqs, signal)
+    # Edit out the ones we want:
+    initial = (initial[0],initial[1],initial[4], initial[5],
+    initial[6],
+    initial[8],
+    initial[10], initial[11])
+
+    # We want to preferntially weight the error on estimating the height of the
+    # individual peaks, so we formulate an error-weighting function based on
+    # these peaks, which is simply a two-gaussian bumpety-bump:
+    w = (ut.gaussian(freqs, initial[0], 0.075, 1, 0, 0) +
+    ut.gaussian(freqs, initial[0]+.18, 0.075, 1, 0, 0))
+
+    # Further, we want to also optimize on the individual lorentzians error, to
+    # restrict the fit space a bit more. For this purpose, we will pass a list
+    # of lorentzians with indices into the parameter list, so that we can do
+    # that (see mopt.err_func for the mechanics).
+    func_list = [[ut.lorentzian, [0,2,4,5,6,7],
+    ut.gaussian(freqs, initial[0], 0.075, 1, 0, 0)],
+    [ut.lorentzian, [1,3,4,5,6,7],
+    ut.gaussian(freqs, initial[1], 0.075, 1, 0, 0)]]
+
+    params, _ = lsq.leastsqbound(mopt.err_func, initial,
+                              args=(freqs, np.real(signal),
+                                    two_lorentzian, w, func_list),
+                              bounds=bounds)
+    return params
+
+def two_lorentzian(freq,freq0_1,freq0_2,area1,area2,hwhm,phase,offset,drift):
+    oo2pi = 1/(2*np.pi)
+    df1 = freq - freq0_1
+    df2 = freq - freq0_2
+    absorptive = oo2pi * area1 * np.ones(freq.shape[0])*(hwhm / (df1**2 + hwhm**2)) + oo2pi * area2 * np.ones(freq.shape[0])*(hwhm / (df2**2 + hwhm**2))
+    dispersive = oo2pi * area1 * df1/(df1**2 + hwhm**2) + oo2pi * area2 * df2/(df2**2 + hwhm**2)
+    return (absorptive * np.cos(phase) + dispersive * np.sin(phase) + offset +
+            drift * df1)
 
 
 def _do_two_gaussian_fit(freqs, signal, bounds=None):
@@ -548,7 +709,6 @@ def _do_two_gaussian_fit(freqs, signal, bounds=None):
    return params
 
 
-
 def fit_two_lorentzian(spectra, f_ppm, lb=2.6, ub=3.6):
    """
    Fit a lorentzian function to the sum spectra to be used for estimation of
@@ -570,16 +730,18 @@ def fit_two_lorentzian(spectra, f_ppm, lb=2.6, ub=3.6):
    n_points = np.abs(idx.stop - idx.start) 
    n_params = 10 # Lotsa params!
    # Set the bounds for the optimization
-   bounds = [(lb,ub), #peak1 
-             (lb,ub), #peak2 
-             (0,None), #area1 
-             (0,None), #area2 
-             (0,ub-lb), #hwhm1 
+   bounds =  [(lb,ub), #peak1
+             #[(lb,ub), #peak1
+             (lb,ub), #peak2
+             (0,None), #area1
+             (0,None), #area2
+             (0,ub-lb), #hwhm1
              (0,ub-lb), #hwhm2
-             (-np.pi/2, np.pi/2), #phase
-             (-np.pi/2, np.pi/2), #phase
+             (-np.pi, np.pi), #phase This really should be in pi/2 bounds
+             (-np.pi, np.pi), #phase
              (None,None), #offset
-             (None, None)] #drift 
+             (None,None)]
+             #(-.5, .5)] #drift
 
    model = np.empty((spectra.shape[0], n_points))
    signal = np.empty((spectra.shape[0], n_points))
@@ -595,7 +757,7 @@ def fit_two_lorentzian(spectra, f_ppm, lb=2.6, ub=3.6):
    return model, signal, params
 
 
-def fit_two_gaussian(spectra, f_ppm, lb=3.6, ub=3.9):
+def fit_two_gaussian(spectra, f_ppm, lb=3.6, ub=3.9, midpoint=False):
    """
    Fit a gaussian function to the difference spectra
 
@@ -620,16 +782,23 @@ def fit_two_gaussian(spectra, f_ppm, lb=3.6, ub=3.9):
    n_params = 8
    fit_func = ut.two_gaussian
    # Set the bounds for the optimization
+   #TODO: the drift parameter is problematic in the GABA doublet fit.
+   #I think we need to make a linear adjustment and then fit without drift
+   #For now, use very restricted bounds
    bounds = [(lb,ub), # peak 1 location
-             (lb,ub), # peak 2 location
-             (0,None), # sigma 1
-             (0,None), # sigma 2
-             (0,None), # amp 1
-             (0,None), # amp 2
+             (lb ,ub), # peak 2 location
+             (0,.5), # sigma 1
+             (0,.5), # sigma 2
+             (0,.02), # amp 1
+             (0,.02), # amp 2
              (None, None), # offset
              (None, None),  # drift
+             #(None, None)
              ]
-
+   if midpoint:
+      bounds[0]=(lb, midpoint+.05)
+      bounds[1]=(midpoint-.05, ub)
+           
    model = np.empty((spectra.shape[0], n_points))
    signal = np.empty((spectra.shape[0], n_points))
    params = np.empty((spectra.shape[0], n_params))
@@ -642,7 +811,6 @@ def fit_two_gaussian(spectra, f_ppm, lb=3.6, ub=3.9):
       model[ii] = fit_func(f_ppm[idx], *params[ii])
 
    return model, signal, params
-
 
 def _do_scale_fit(freqs, signal, model, w=None):
    """
