@@ -478,17 +478,30 @@ def lorentzian(freq, freq0, area, hwhm, phase, offset, drift):
 
 def two_lorentzian(freq, freq0_1, freq0_2, area1, area2, hwhm1, hwhm2, phase1,
                    phase2, offset, drift):
-   """
-   A two-Lorentzian model.
+    """
+    A two-Lorentzian model.
 
-   This is simply the sum of two lorentzian functions in some part of the
-   spectrum. Each individual Lorentzian has its own peak frequency, area, hwhm
-   and phase, but they share common offset and drift parameters.
-   
-   """
-   return (lorentzian(freq, freq0_1, area1, hwhm1, phase1, offset, drift) +
-           lorentzian(freq, freq0_2, area2, hwhm2, phase2, offset, drift))
- 
+    This is simply the sum of two lorentzian functions in some part of the
+    spectrum. Each individual Lorentzian has its own peak frequency, area, hwhm
+    and phase, but they share common offset and drift parameters.
+
+    """
+
+    return (lorentzian(freq, freq0_1, area1, hwhm1, phase1, offset, drift) +
+        lorentzian(freq, freq0_2, area2, hwhm2, phase2, offset, drift))
+
+    #return (lorentzian(freq, freq0_1, area1, hwhm1, phase1, offset, drift) +
+    #    lorentzian(freq, freq0_2, area2, hwhm2, phase2, offset, drift))
+def cho_cr_model(freq,freq0,area1,area2,hwhm, phase,offset,drift):
+  oo2pi = 1/(2*np.pi)
+  df1 = freq - freq0
+  df2 = freq - (freq0 + 0.18) #f0 is Cr 
+  #df2 = freq - (freq0 - 0.18) #f0 is Cho
+  absorbtion = oo2pi * area1 * np.ones(freq.shape[0]) * hwhm / (df1**2 + hwhm**2)+oo2pi * area2 * np.ones(freq.shape[0]) * hwhm / (df2**2 + hwhm ** 2)
+
+  dispersion = oo2pi * area1 * df1 / (df1**2 + hwhm**2) + oo2pi * area2 * df2 / (df2**2 + hwhm**2)
+  return absorbtion*np.cos(phase) + dispersion * np.sin(phase) + offset + drift*df1
+
 
 def gaussian(freq, freq0, sigma, amp, offset, drift):
     """
@@ -499,18 +512,22 @@ def gaussian(freq, freq0, sigma, amp, offset, drift):
         return (amp * np.exp(- ((freq - freq0)**2) / (sigma**2) ) +
                 drift * freq + offset)
 
+def gaba_doublet(freq, freq3,freqdiff, sigma1,sigma2,amp1,amp2,offset,drift):
+    return (gaussian(freq,freq3,sigma1,amp1,offset,drift) + gaussian(freq,freq3-freqdiff,sigma2,amp2,offset,drift))
+
 def two_gaussian(freq, freq0_1, freq0_2, sigma1, sigma2, amp1, amp2,
-                   offset, drift):
-   """
-   A two-Gaussian model.
+                 offset, drift):
+    """
+    A two-Gaussian model.
+    
+    This is simply the sum of two gaussian functions in some part of the
+    spectrum. Each individual gaussian has its own peak frequency, sigma,
+    and amp, but they share common offset and drift parameters.
 
-   This is simply the sum of two gaussian functions in some part of the
-   spectrum. Each individual gaussian has its own peak frequency, sigma,
-   and amp, but they share common offset and drift parameters.
+    """
+    return (gaussian(freq, freq0_1, sigma1, amp1, offset, drift) +
+            gaussian(freq, freq0_2, sigma2, amp2, offset, drift))
 
-   """
-   return (gaussian(freq, freq0_1, sigma1, amp1, offset, drift) +
-           gaussian(freq, freq0_2, sigma2, amp2, offset, drift))
 
 def make_idx(f, lb, ub):
     """
