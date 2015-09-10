@@ -172,7 +172,7 @@ class GABA(object):
         self.water_auc = self._calc_auc(ut.lorentzian, params, self.water_idx)
 
 
-    def _calc_auc(self, model, params, idx):
+    def _calc_auc(self, model, params, signal, idx,amp_idx=1):
         """
         Helper function to calculate the area under the curve of a model
 
@@ -193,24 +193,30 @@ class GABA(object):
            Indices to the part of the spectrum over which AUC will be
            calculated.
 
+        amp_idx :
+            Parameter indices to zero
+
         """
         # Here's what we are going to do: For each transient, we generate
         # the spectrum for two distinct sets of parameters: one is exactly as
         # fit to the data, the other is the same expect with amplitude set to
         # 0. To calculate AUC, we take the difference between them:
         auc = np.zeros(params.shape[0])
+        integral = np.zeros(params.shape[0])
         delta_f = np.abs(self.f_ppm[1]-self.f_ppm[0])
         p = np.copy(params)
         for t in range(auc.shape[0]):
             model1 = model(self.f_ppm[idx], *p[t])
             # This controls the amplitude in both the Gaussian and the
             # Lorentzian: 
-            p[t, 1] = 0
+            p[t, amp_idx] = 0
             model0 = model(self.f_ppm[idx], *p[t])
             auc[t] = np.sum((model1 - model0) * delta_f)
-        return auc
+            integral[t] = np.sum((signal-model0) * delta_f)
+        return auc,integral
 
-    def _outlier_rejection(self, params, model, signal, ii):
+
+    def _outlier_rejection(self, params, model, signal, ii, zthresh=3.0):
         """
         Helper function to reject outliers
 
@@ -218,11 +224,11 @@ class GABA(object):
         
         """
         # Z score across repetitions:
-        z_score = (params - np.mean(params, 0))/np.std(params, 0)
+        z_score = (params - np.nanmean(params, 0))/np.nanstd(params, 0)
         # Silence warnings: 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            outlier_idx = np.where(np.abs(z_score)>3.0)[0]
+            outlier_idx = np.where(np.abs(z_score)>zthresh)[0]
             nan_idx = np.where(np.isnan(params))[0]
             outlier_idx = np.unique(np.hstack([nan_idx, outlier_idx]))
             ii[outlier_idx] = 0
@@ -264,6 +270,7 @@ class GABA(object):
                                                        lb=fit_lb,
                                                        ub=fit_ub)
 
+
         # Use an array of ones to index everything but the outliers and nans:
         ii = np.ones(signal.shape[0], dtype=bool)
         # Reject outliers:
@@ -271,7 +278,7 @@ class GABA(object):
             model, signal, params, ii = self._outlier_rejection(params,
                                                                 model,
                                                                 signal,
-                                                                ii)
+                                                                ii, reject_outliers)
             
         # We'll keep around a private attribute to tell us which transients
         # were good (this is for both creatine and choline):
@@ -279,8 +286,8 @@ class GABA(object):
         
         # Now we separate choline and creatine params from each other (remember
         # that they both share offset and drift!):
-        self.choline_params = params[:, (0,2,4,6,8,9)]
-        self.creatine_params = params[:, (1,3,5,7,8,9)]
+        self.choline_params = params[:, (0,2,4,5,6,7)]
+        self.creatine_params = params[:, (1,3,4,5,6,7)]
         
         self.cr_idx = ut.make_idx(self.f_ppm, fit_lb, fit_ub)
 
@@ -586,7 +593,7 @@ class GABA(object):
         excitatory and inhibitory neurotransmitters in amyothrophic lateral
         sclerosis revealed by use of 3T proton MRS
         """
-        model, signal, params = ana.fit_lorentzian(self.diff_spectra,
+        model, signal, params = ana.fit_lorentzian(self.sum_spectra,
                                                    self.f_ppm,
                                                    lb=fit_lb,
                                                    ub=fit_ub)
@@ -690,13 +697,14 @@ class GABA(object):
         """
         Helper function to reject outliers based on mean amplitude
         """
-        maxamps = np.nanmax(np.abs(model),0)
+        maxamps = np.nanmax(np.abs(model),-1)
         z_score = (maxamps - np.nanmean(maxamps,0))/np.nanstd(maxamps,0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            outlier_idx = np.where(np.abs(z_score)>2.0)[0]
+            outlier_idx = np.where((np.abs(z_score)>2.0))[0]
+            extreme_idx = np.where(maxamps>1)[0]
             nan_idx = np.where(np.isnan(params))[0]
-            outlier_idx = np.unique(np.hstack([nan_idx, outlier_idx]))
+            outlier_idx = np.unique(np.hstack([nan_idx, outlier_idx,extreme_idx]))
             ii[outlier_idx] = 0
             model[outlier_idx] = np.nan
             signal[outlier_idx] = np.nan
