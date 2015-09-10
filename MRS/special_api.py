@@ -133,7 +133,7 @@ class GABA(api.GABA):
         #self.sum_spectra = np.array(sum_spectra - baseline,ndmin=2)
         self.sum_spectra=sum_spectra
         self.f_ppm = ppm_sig
-        self.idx = ut.make_idx(self.f_ppm, 0, 4)
+        self.idx = ut.make_idx(self.f_ppm, min_ppm, max_ppm)
 
     def read_nifti(self, fname, sampling_rate=2500.):
         """
